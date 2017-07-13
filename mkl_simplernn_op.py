@@ -15,6 +15,13 @@ class SimpleRNN(gof.Op):
         w_x = tensor.as_tensor_variable(w_x)
         w_h = tensor.as_tensor_variable(w_h)
         b = tensor.as_tensor_variable(b)
+
+        assert x.ndim is 3
+        assert h_init.ndim is 2
+        assert w_x.ndim is 2
+        assert w_h.ndim is 2
+        assert b.ndim is 3
+
         out = [h_init.type()]
         return gof.Apply(self, [x, h_init, w_x, w_h, b], out)
 
@@ -35,6 +42,11 @@ class SimpleRNN(gof.Op):
                             % (node.inputs[0].type.dtype))
 
         ccode = """
+	    size_t timesteps;
+	    size_t input_dim;
+	    size_t batch_size;
+	    size_t units;
+
 	    %(dtype)s** A;
             %(dtype)s** B;
             %(dtype)s** C;
@@ -57,7 +69,12 @@ class SimpleRNN(gof.Op):
 
     def c_init_code_struct(self, node, name, sub):
         ccode = """
-            A = NULL;
+	    timesteps = 0;
+	    input_dim = 0;
+	    batch_size = 0;
+	    units = 0;            
+
+	    A = NULL;
             B = NULL;
             C = NULL;
 
@@ -81,17 +98,17 @@ class SimpleRNN(gof.Op):
     def c_cleanup_code_struct(self, node, name):
         ccode = """
             if (A) {
-                free (A);
+                mkl_free (A);
                 A = NULL;
             }
 
             if (B) {
-                free (B);
+                mkl_free (B);
                 B = NULL;
             }
 
             if (C) {
-                free (C);
+                mkl_free (C);
                 C =NULL;
             }
 	"""
@@ -113,14 +130,98 @@ class SimpleRNN(gof.Op):
                             % (node.inputs[0].type.dtype))
 	print locals()
         ccode = """
-	    int i,j;
-	    int timesteps, input_dim, batch_size, units;
+	    int i = 0;
 	    timesteps = PyArray_DIMS(%(x)s)[0];
 	    input_dim = PyArray_DIMS(%(x)s)[1];
 	    batch_size = PyArray_DIMS(%(x)s)[2];
 	    units = PyArray_DIMS(%(h_init)s)[0];
 
-            m_g[0] = units;
+	    %(d)s* x_ptr = NULL;
+            %(d)s* w_x_ptr = NULL;
+            %(d)s* w_h_ptr = NULL;
+	    %(d)s* b_ptr = NULL;
+
+	    PyArrayObject* x_src = NULL;
+            if (!PyArray_IS_C_CONTIGUOUS(%(x)s)) {
+                printf(\"Warning: Need convert x to C-Contiguous\\n\");
+                x_src = (PyArrayObject*)PyArray_ContiguousFromAny((PyObject*)%(x)s,
+                                            PyArray_TYPE(%(x)s),
+                                            PyArray_NDIM(%(x)s),
+                                            PyArray_NDIM(%(x)s));
+                if (!x_src) {
+                    PyErr_SetString(PyExc_RuntimeError, \"GRU: fail to cast x to contiguous array\");
+                    goto gru_fail;
+                }
+                x_ptr = (%(d)s*) PyArray_DATA(x_src);
+            } else {
+                x_ptr = (%(d)s*) PyArray_DATA(%(x)s);
+            }
+
+	    PyArrayObject* w_x_src = NULL;
+            if (!PyArray_IS_C_CONTIGUOUS(%(w_x)s)) {
+                printf(\"Warning: Need convert w_x to C-Contiguous\\n\");
+                w_x_src = (PyArrayObject*)PyArray_ContiguousFromAny((PyObject*)%(w_x)s,
+                                            PyArray_TYPE(%(w_x)s),
+                                            PyArray_NDIM(%(w_x)s),
+                                            PyArray_NDIM(%(w_x)s));
+                if (!w_x_src) {
+                    PyErr_SetString(PyExc_RuntimeError, \"GRU: fail to cast w_x to contiguous array\");
+                    goto gru_fail;
+                }
+                w_x_ptr = (%(d)s*) PyArray_DATA(w_x_src);
+            } else {
+                w_x_ptr = (%(d)s*) PyArray_DATA(%(w_x)s);
+            }
+
+	    PyArrayObject* w_h_src = NULL;
+            if (!PyArray_IS_C_CONTIGUOUS(%(w_h)s)) {
+                printf(\"Warning: Need convert w_h to C-Contiguous\\n\");
+                w_h_src = (PyArrayObject*)PyArray_ContiguousFromAny((PyObject*)%(w_h)s,
+                                            PyArray_TYPE(%(w_h)s),
+                                            PyArray_NDIM(%(w_h)s),
+                                            PyArray_NDIM(%(w_h)s));
+                if (!w_h_src) {
+                    PyErr_SetString(PyExc_RuntimeError, \"GRU: fail to cast w_h to contiguous array\");
+                    goto gru_fail;
+                }
+                w_h_ptr = (%(d)s*) PyArray_DATA(w_h_src);
+            } else {
+                w_h_ptr = (%(d)s*) PyArray_DATA(%(w_h)s);
+            }
+
+	    PyArrayObject* b_src = NULL;
+	    if (!PyArray_IS_C_CONTIGUOUS(%(b)s)) {
+                    printf(\"Warning: Need convert bias to C-Contiguous\\n\");
+                    b_src = (PyArrayObject*)PyArray_ContiguousFromAny((PyObject*)%(b)s,
+                                                PyArray_TYPE(%(b)s),
+                                                PyArray_NDIM(%(b)s),
+                                                PyArray_NDIM(%(b)s));
+                    if (!b_src) {
+                        PyErr_SetString(PyExc_RuntimeError, \"GRU: fail to case bias to contiguous array\");
+                        goto gru_fail;
+                    }
+                    b_ptr = (%(d)s*) PyArray_DATA(b_src);
+                } else {
+                    b_ptr = (%(d)s*) PyArray_DATA(%(b)s);
+            }            
+	
+	    // check Dot(w_x, x)
+            if (PyArray_DIMS(%(w_x)s)[1] != PyArray_DIMS(%(x)s)[1]) {
+                PyErr_SetString(PyExc_RuntimeError, \"GRU: w_x * x size error\");
+                goto gru_fail;
+            }
+	    // check Dot(w_h, h_init)
+	    if (PyArray_DIMS(%(w_h)s)[1] != PyArray_DIMS(%(h_init)s)[0]) {
+                PyErr_SetString(PyExc_RuntimeError, \"GRU: w_h * h_init size error\");
+                goto gru_fail;
+            }
+	    // check b
+            if (PyArray_DIMS(%(b)s)[0] != PyArray_DIMS(%(x)s)[0] || PyArray_DIMS(%(b)s)[1] != PyArray_DIMS(%(w_x)s)[0] || PyArray_DIMS(%(b)s)[2] != PyArray_DIMS(%(x)s)[2]) {
+                PyErr_SetString(PyExc_RuntimeError, \"GRU: b size error\");
+                goto gru_fail;
+            }
+
+	    m_g[0] = units;
             k_g[0] = input_dim;
             n_g[0] = batch_size;
             lda_g[0] = k_g[0];
@@ -130,13 +231,21 @@ class SimpleRNN(gof.Op):
             size_per_grp[0] = timesteps;
 
             if (A == NULL)
-                A = (%(d)s**)malloc(timesteps * sizeof (%(d)s*));
+                A = (%(d)s**)mkl_malloc(timesteps * sizeof (%(d)s*), 64);
 
             if (B == NULL)
-                B = (%(d)s**)malloc(timesteps * sizeof (%(d)s*));
+                B = (%(d)s**)mkl_malloc(timesteps * sizeof (%(d)s*), 64);
 
             if (C == NULL)
-                C = (%(d)s**)malloc(timesteps * sizeof (%(d)s*));
+                C = (%(d)s**)mkl_malloc(timesteps * sizeof (%(d)s*), 64);
+
+	    if (A == NULL || B == NULL || C == NULL) {
+	      	printf( "\\n ERROR: Can't allocate memory for matrices. Aborting... \\n");
+      		mkl_free(A);
+      		mkl_free(B);
+      		mkl_free(C);
+      		return 1;
+    	    }
 
             for (i = 0 ; i < timesteps; i ++) {
                 A[i] = (%(d)s*) PyArray_DATA(%(w_x)s);
@@ -182,7 +291,12 @@ class SimpleRNN(gof.Op):
                         units, batch_size, units, 1.0, (%(d)s*) PyArray_DATA(%(w_h)s), units, h_tm1, batch_size, 1.0, C[i], batch_size);
 	        v%(dtype)sTanh(sz, C[i], h_tm1);
             }
-	
+
+            gru_fail:
+            Py_XDECREF(x_src);
+            Py_XDECREF(w_x_src);
+            Py_XDECREF(w_h_src);
+            Py_XDECREF(b_src);	
 	""" % locals()
         return ccode
 
