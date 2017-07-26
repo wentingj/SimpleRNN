@@ -34,10 +34,10 @@ def SimpleRNN_MKL_backward():
 
     o = SimpleRNN(return_sequences=True)(X, W_x, W_h, B, H_init)
     loss = o.sum()
-    gx, gwx, gwh, gb = theano.grad(loss, [X, W_x, W_h, B])
+    gx, gwx, gwh, gb, gh_init= theano.grad(loss, [X, W_x, W_h, B, H_init])
 
     #f = theano.function([X, W_x, W_h, B, H_init], [o])
-    f = theano.function([X, W_x, W_h, B, H_init], [loss, gx, gwx, gwh, gb])
+    f = theano.function([X, W_x, W_h, B, H_init], [loss, gx, gwx, gwh, gb, gh_init])
     # theano.printing.pydotprint(f, outfile='simple_rnn_bw.png', var_with_name_simple=True)
     return f
 
@@ -55,8 +55,8 @@ def SimpleRNN_theano_backward():
     result, updates = theano.scan(step, sequences=[X], outputs_info=Hid, name="SimpleRNN_theano")
 
     loss = result.sum()
-    gx, gwx, gwh, gb  = theano.grad(loss, [X, W_x, W_h, B])
-    f = theano.function([X, W_x, W_h, Hid, B], [loss, gx, gwx, gwh, gb], updates=updates)
+    gx, gwx, gwh, gb, gh_init  = theano.grad(loss, [X, W_x, W_h, B, Hid])
+    f = theano.function([X, W_x, W_h, Hid, B], [loss, gx, gwx, gwh, gb, gh_init], updates=updates)
     # theano.printing.pydotprint(f, outfile='simple_rnn_theano.png', var_with_name_simple=True)
     return f
 
@@ -91,5 +91,9 @@ if __name__ == '__main__':
     p = np.where((mkl_result[4]-theano_result[4]) == (mkl_result[4]-theano_result[4]).max())
     print('gradient bias max err: %s' %( abs((mkl_result[4]-theano_result[4]).max())))
     print('gradient bias relative err: %s' %( abs((mkl_result[4]-theano_result[4]).max()/theano_result[4][p].max())))
-    
+   
+    print('\n====Compare gradient hinit================')
+    p = np.where((mkl_result[5]-theano_result[5]) == (mkl_result[5]-theano_result[5]).max())
+    print('gradient bias max err: %s' %( abs((mkl_result[5]-theano_result[5]).max())))
+    print('gradient bias relative err: %s' %( abs((mkl_result[5]-theano_result[5]).max()/theano_result[5][p].max()))) 
 

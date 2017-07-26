@@ -308,14 +308,15 @@ class SimpleRNN(gof.Op):
     def grad(self, inp, grads):
 	x, wx, wh, b, h_init, = inp[0:5]
 	gz, = grads
-        disc = [DisconnectedType()() for i in inp[4:]]
+        #disc = [DisconnectedType()() for i in inp[4:]]
         
 	h = SimpleRNN(self.return_sequences)(x, wx, wh, b, h_init)
-        gradX, gradW, gradU, gradB = SimpleRNNGrad(self.return_sequences)(x, h_init, h, wx, wh, gz)
-	return [gradX, gradW, gradU, gradB] + disc
+        gradX, gradW, gradU, gradB, gradHinit = SimpleRNNGrad(self.return_sequences)(x, h_init, h, wx, wh, gz)
+	return [gradX, gradW, gradU, gradB, gradHinit]
+	#return [gradX, gradW, gradU, gradB] + disc
 
     def c_code_cache_version(self):
         return (1, 0, 0)
 
-    def connect_pattern(self, node):
-        return [[1], [1], [1], [1], [0]]
+    #def connect_pattern(self, node):
+    #    return [[1], [1], [1], [1], [0]]

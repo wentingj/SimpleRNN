@@ -19,7 +19,7 @@ class SimpleRNNGrad(gof.Op):
       
         gz = tensor.as_tensor_variable(grads)
 
-        out = [x.type(), wx.type(), wh.type(), h_init.type()]
+        out = [x.type(), wx.type(), wh.type(), h_init.type(), h_init.type()]
         return gof.Apply(self, [x, h_init, h_store, wx, wh, gz], out)
 
     def c_headers(self):
@@ -67,7 +67,7 @@ class SimpleRNNGrad(gof.Op):
 
     def c_code(self, node, name, inputs, outputs, sub):
 	x, h_init, h_store, wx, wh, gz = inputs
-	gx, gwx, gwh, gb,  = outputs
+	gx, gwx, gwh, gb, gh_init = outputs
 	
 	if node.inputs[0].type.dtype is 'float32':
             dtype = 's'
@@ -120,6 +120,12 @@ class SimpleRNNGrad(gof.Op):
                 %(gb)s = (PyArrayObject*) PyArray_ZEROS(2, dims, PyArray_TYPE(%(h_init)s), 0);
             }
 
+	    if (NULL == %(gh_init)s) {
+                dims[0] = batch_size;
+                dims[1] = units;
+                %(gh_init)s = (PyArrayObject*) PyArray_ZEROS(2, dims, PyArray_TYPE(%(h_init)s), 0);
+            }
+
             hh_store = (%(d)s*)mkl_malloc(timesteps * batch_size * units *sizeof(%(d)s), 64 );
             onemhh_store = (%(d)s*)mkl_malloc(timesteps * batch_size * units *sizeof(%(d)s), 64 );
             store = (%(d)s*)mkl_malloc(timesteps * batch_size * units * sizeof(%(d)s), 64 );
@@ -158,11 +164,13 @@ class SimpleRNNGrad(gof.Op):
             	    else
             	        cblas_%(dtype)sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, units, units, batch_size,1.0, (%(d)s*) PyArray_DATA(%(h_store)s) + (i-1)*batch_size * units, units, store + k*batch_size*units, units, 1.0, (%(d)s*) PyArray_DATA(%(gwh)s), units);
 		    v%(dtype)sAdd(batch_size * units, store + k*batch_size*units, (%(d)s*) PyArray_DATA(%(gb)s), (%(d)s*) PyArray_DATA(%(gb)s));
-		}
+		}	
                 v%(dtype)sAdd(batch_size*input_dim, (%(d)s*) PyArray_DATA(%(gx)s)+i*batch_size*input_dim, tmp2, (%(d)s*) PyArray_DATA(%(gx)s)+i*batch_size*input_dim);
                 memset(tmp2, 0.0, batch_size * input_dim * sizeof(%(d)s));
             }
-
+	    for(i=0; i<timesteps; i++){
+	    	cblas_%(dtype)sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,batch_size, units, units, 1.0, store + i*batch_size*units, units, (%(d)s*) PyArray_DATA(%(wh)s), units, 1.0,  (%(d)s*) PyArray_DATA(%(gh_init)s), units);
+	    }
             mkl_free(tmp);
             mkl_free(tmp2);
 
